@@ -1,10 +1,6 @@
 ---
 name: apple-app-organizer
-description: This skill should be used when a user on macOS wants to clean up or organize built-in Apple applications — Messages (iMessage/SMS), Notes, Reminders, Calendar, Contacts, or Mail. It identifies clutter (spam conversations, duplicate notes, completed reminders, past events, duplicate contacts, promotional mail) and batch-removes or archives it using a safety-first workflow: dry-run by default, whitelist protection for legitimate data, trash-not-delete wherever possible, and 30-day undo via native recovery folders. Trigger phrases include 整理苹果, 清理信息, 清理备忘录, 删除过期日历, 合并重复联系人, 清理垃圾邮件, clean up Apple apps, tidy up iMessage, dedupe Notes, organize Reminders, purge old Calendar events, merge duplicate Contacts, archive old Mail. Requires macOS with Full Disk Access + Accessibility + Automation permissions for the invoking runtime.
-description_zh: 苹果应用整理套件
-description_en: Apple built-in app organizer
-disable: false
-agent_created: true
+description: "This skill should be used when a user on macOS wants to clean up or organize built-in Apple applications — Messages (iMessage/SMS), Notes, Reminders, Calendar, Contacts, or Mail. It identifies clutter (spam conversations, duplicate notes, completed reminders, past events, duplicate contacts, promotional mail) and batch-removes or archives it using a safety-first workflow — dry-run by default, whitelist protection for legitimate data, trash-not-delete wherever possible, and 30-day undo via native recovery folders. Trigger phrases include 整理苹果, 清理信息, 清理备忘录, 删除过期日历, 合并重复联系人, 清理垃圾邮件, clean up Apple apps, tidy up iMessage, dedupe Notes, organize Reminders, purge old Calendar events, merge duplicate Contacts, archive old Mail. Requires macOS with Full Disk Access, Accessibility, and Automation permissions for the invoking runtime."
 license: MIT
 ---
 
@@ -124,14 +120,79 @@ Key pitfalls (lessons learned):
 
 ## Notes
 
-Scan `NoteStore.sqlite` to find duplicates and empties; archive via `Notes` AppleScript.
+Scan `~/Library/Group Containers/group.com.apple.notes/NoteStore.sqlite` to find
+duplicates and empty notes; archive or delete via Notes AppleScript.
 
-See [references/notes_store_schema.md](references/notes_store_schema.md) for table layout.
+See [references/notes_store_schema.md](references/notes_store_schema.md) for the full
+table layout and decoding strategy.
 
-Pitfalls:
-- Encrypted notes cannot be read — skipped automatically
-- iCloud sync may lag up to 30s after archive
-- `Archive` folder must exist; auto-created on first use
+### Prerequisites
+
+- **Full Disk Access** — required to read the Group Container sandbox
+  ```bash
+  sqlite3 -readonly ~/Library/Group\ Containers/group.com.apple.notes/NoteStore.sqlite \
+    "SELECT COUNT(*) FROM ZICCLOUDSYNCINGOBJECT WHERE Z_ENT IN (5,11,12);"
+  ```
+- **Automation permission** — System Settings → Privacy & Security → Automation →
+  enable **Notes** (the agent will be prompted on first run)
+
+### Workflow
+
+```bash
+# Scan all notes (shows duplicates, empties, metadata)
+python3 scripts/organize.py notes scan
+
+# Find duplicate notes
+python3 scripts/organize.py notes scan --include-body
+
+# Archive duplicate notes (dry-run first)
+python3 scripts/organize.py notes clean --action archive --older-than-days 30 --dry-run
+
+# Delete empty notes (requires --execute)
+python3 scripts/organize.py notes clean --action delete-empty --min-chars 5 --dry-run
+python3 scripts/organize.py notes clean --action delete-empty --min-chars 5 --execute --yes
+```
+
+### API (scripts/modules/notes.py)
+
+```python
+from modules.notes import list_folders, scan_notes, detect_duplicates, detect_empty, archive_note, delete_note
+
+folders = list_folders()
+notes = scan_notes()
+dup_groups = detect_duplicates()   # [[uuid, uuid, ...], ...]
+empty = detect_empty(min_chars=10)  # [uuid, ...]
+archive_note(uuid)                   # safe, icloud-synced
+delete_note(uuid, dry_run=True)     # dry-run guard; set dry_run=False to execute
+```
+
+### Pitfalls
+
+- **Encrypted notes** (`ZISPASSWORDPROTECTED=1`) cannot be read — they are
+  automatically excluded from body scans and `detect_empty()`. They appear in
+  `scan_notes()` with `is_encrypted: True` and `body_preview: ""`.
+- **Body decoding**: note text is stored as a gzip-compressed protobuf with
+  UTF-8 text interleaved with binary structure bytes. The module uses
+  `errors='ignore'` UTF-8 decoding to strip proto bytes, then extracts readable
+  sequences via regex. Short words (2–3 chars) may occasionally be dropped.
+- **iCloud sync lag**: AppleScript changes (archive/delete) sync to iCloud within
+  ~30 seconds. Re-scanning immediately after an action may show stale data.
+  Add a `time.sleep(1)` delay in scripts that chain scan + mutate.
+- **`Archive` folder**: created automatically on first `archive_note()` call if
+  it does not exist.
+- **Notes.app must be open** (or at least not blocking automation) for AppleScript
+  operations to succeed. Errors are raised as `AppleScriptError` with stderr.
+
+### Module status
+
+| Function | Status |
+|----------|--------|
+| `list_folders()` | ✅ v1.0 |
+| `scan_notes()` | ✅ v1.0 |
+| `detect_duplicates()` | ✅ v1.0 |
+| `detect_empty()` | ✅ v1.0 |
+| `archive_note()` | ✅ v1.0 |
+| `delete_note()` | ✅ v1.0 (dry-run default) |
 
 ## Reminders
 

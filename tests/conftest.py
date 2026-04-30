@@ -1,4 +1,5 @@
 """Pytest configuration and shared fixtures."""
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import sqlite3

@@ -1,64 +1,58 @@
-# chat.db Schema Notes
+# Messages chat.db Schema Notes
 
-The macOS iMessage database lives at `~/Library/Messages/chat.db`. Key tables used by this skill:
+Located at `~/Library/Messages/chat.db`. Opened **read-only** by this skill:
 
-## `chat`
+```python
+sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+```
+
+## Key tables
+
+### `chat`
 
 One row per conversation (1:1 or group).
 
-| Column | Meaning |
-|--------|---------|
-| `ROWID` | Primary key, referenced by join tables |
-| `guid` | Apple iMessage/SMS global identifier |
-| `chat_identifier` | Phone number, email, or short code — displayed in UI |
-| `display_name` | Group chat name, usually NULL for 1:1 |
-| `service_name` | `iMessage` \| `SMS` |
-| `is_archived` | 1 if user archived (not used by "delete") |
-| `is_recovered` | Not set when recently-deleted — use `chat_recoverable_message_join` instead |
+| Column | Notes |
+|--------|-------|
+| `ROWID` | PK, used in join tables |
+| `guid` | Apple iMessage/SMS global id |
+| `chat_identifier` | Phone / email / short-code shown in UI |
+| `display_name` | Group chat name, NULL for 1:1 |
+| `service_name` | `iMessage` or `SMS` |
+| `is_archived` | User-archived flag (not the same as delete) |
 
-**CRITICAL**: Rows remain in `chat` even after the user deletes a conversation. The "Recently Deleted" folder is represented by a separate join table, NOT a status flag on `chat`.
+**Rows remain in `chat` after user deletes a conversation**.
 
-## `message`
+### `message`
 
-One row per individual message.
-
-| Column | Meaning |
-|--------|---------|
-| `ROWID` | Primary key |
-| `text` | Plain-text body, often NULL |
-| `attributedBody` | NSAttributedString binary blob — contains the real text when `text` is NULL |
-| `date` | Nanoseconds since 2001-01-01 UTC (Apple epoch) |
-| `cache_has_attachments` | 1 if the message has an image/file |
-| `associated_message_type` | 0 = normal, else = tapback/reaction |
+| Column | Notes |
+|--------|-------|
+| `ROWID` | PK |
+| `text` | Plain text, often NULL |
+| `attributedBody` | NSAttributedString blob — contains real text when `text` is NULL |
+| `date` | Nanoseconds since **2001-01-01 UTC** (Apple epoch) |
+| `associated_message_type` | 0 = normal; others = tapback/reaction |
 
 ### Date conversion
 
 ```sql
-datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime') AS iso_time
+datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime')
 ```
 
-### Text extraction strategy
+### `chat_message_join`
 
-1. Read `m.text`. If non-empty, use it.
-2. Otherwise, `m.attributedBody` is likely populated. Decode via:
-   - Tier 1: `pytypedstream` Unarchiver (proper typedstream deserialization)
-   - Tier 2: Length-prefix parsing (NSString markers 0x2B/0x4F/0x49)
-   - Tier 3: Raw byte scan for NSString marker + length-prefix
-3. Use the companion `imessage-query` skill (https://skills.sh/terrylica/cc-skills/imessage-query) which implements all three tiers.
+Bridges `chat.ROWID ↔ message.ROWID` (M:N).
 
-## `chat_message_join`
+### `chat_recoverable_message_join`
 
-Bridges `chat.ROWID <-> message.ROWID` (M:N). Every normal message links here.
-
-## `chat_recoverable_message_join`
-
-**Key for this skill.** Messages in the "Recently Deleted" folder move from `chat_message_join` to here. Retained for 30 days.
+**Critical for this skill.** When the user confirms "Delete Conversation",
+Messages moves the message-join rows here. Retained 30 days.
 
 ```sql
--- Count conversations with recoverable messages (i.e., pending permanent delete)
+-- How many conversations are pending hard-delete?
 SELECT COUNT(DISTINCT chat_id) FROM chat_recoverable_message_join;
 
--- List those chats
+-- List them
 SELECT DISTINCT c.chat_identifier, COUNT(*) AS pending
 FROM chat_recoverable_message_join crmj
 JOIN chat c ON c.ROWID = crmj.chat_id
@@ -70,28 +64,28 @@ A chat appearing here is what the user sees in **显示 → 最近删除**.
 
 ## Deletion semantics
 
-When the user selects **对话 → 删除对话…** and confirms:
-
-1. Rows in `chat_message_join` for that chat move to `chat_recoverable_message_join`
-2. The chat disappears from the main sidebar
-3. `chat` row is NOT removed
-4. After 30 days (or when user clicks "删除" in Recently Deleted), trigger
+1. User confirms "删除对话"
+2. `chat_message_join` rows move to `chat_recoverable_message_join`
+3. Chat disappears from sidebar UI
+4. `chat` row itself is NOT removed
+5. After 30 days (or user clicks delete in Recently Deleted), trigger
    `before_delete_chat_update_sync_chat_deletes` inserts into `sync_deleted_chats`
    and the row is physically removed
 
-This is why the batch-delete script relies on UI state (sidebar contents via `name of window 1`) rather than querying `chat`.
+**This is why** this skill does not rely on `chat` row count to verify
+deletion — it checks UI state (`name of window 1` after advance) instead.
 
 ## Useful queries
 
 ```sql
--- Total chats (includes Recently Deleted but not fully purged)
+-- All chats (includes Recently Deleted)
 SELECT COUNT(*) FROM chat;
 
--- Chats currently shown in sidebar (approximation)
+-- Chats currently visible in sidebar (approximate)
 SELECT COUNT(*) FROM chat
 WHERE ROWID NOT IN (SELECT DISTINCT chat_id FROM chat_recoverable_message_join);
 
--- Top senders by message count
+-- Top senders by message count (useful for spam detection)
 SELECT c.chat_identifier, COUNT(m.ROWID) AS msgs
 FROM chat c
 LEFT JOIN chat_message_join cmj ON c.ROWID = cmj.chat_id
@@ -100,3 +94,15 @@ GROUP BY c.ROWID
 ORDER BY msgs DESC
 LIMIT 20;
 ```
+
+## attributedBody decoding
+
+Many messages store text only in `attributedBody` (NSAttributedString blob).
+Use the companion `terrylica/cc-skills@imessage-query` skill for full decoding:
+
+```bash
+python3 ~/.workbuddy/skills/imessage-query/scripts/decode_attributed_body.py \
+    --chat "+862133464992" --limit 1 --order desc
+```
+
+That decoder uses a 3-tier strategy (pytypedstream → manual length-prefix → NSString-marker scan).

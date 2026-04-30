@@ -1,63 +1,10 @@
-# AppleScript Recipes for Messages.app
+# AppleScript Recipes for macOS Apps
 
-A cookbook of hard-won AppleScript patterns for automating Messages.app on macOS.
+Tested patterns used across apple-app-organizer modules.
 
-## What DOES NOT work
+## Messages.app
 
-### ❌ `delete` AppleScript command
-
-```applescript
-tell application "Messages"
-    delete chat 1
-end tell
--- Error -10000: Messages encountered an error: AppleEvent handler failed
-```
-
-Messages.app's scripting dictionary exposes `chat` objects as read-only — no `delete` verb.
-
-### ❌ Cmd+Delete
-
-The menu item **对话 → 删除对话…** (`Conversation → Delete Conversation…`) has no keyboard shortcut. Verify:
-
-```applescript
-tell application "System Events"
-    tell process "Messages"
-        set delItem to menu item "删除对话…" of menu 1 of menu bar item "对话" of menu bar 1
-        return value of attribute "AXMenuItemCmdChar" of delItem
-        -- Returns missing value
-    end tell
-end tell
-```
-
-Must invoke via menu click.
-
-### ❌ Chinese via `keystroke`
-
-```applescript
-keystroke "瑞幸咖啡"
--- Produces "a'a'a'a" or similar garbage on many systems
-```
-
-The keystroke action translates to raw keycodes; non-ASCII multibyte input fails silently.
-
-## What DOES work
-
-### ✅ Chinese input via clipboard
-
-```applescript
-set the clipboard to "瑞幸咖啡"
-tell application "Messages" to activate
-delay 0.3
-tell application "System Events"
-    tell process "Messages"
-        -- focus the target field first, then paste
-        keystroke "v" using command down
-    end tell
-end tell
-delay 1.5  -- let search settle
-```
-
-### ✅ Locate the search field
+### Locate search field
 
 ```applescript
 tell application "System Events"
@@ -76,106 +23,206 @@ tell application "System Events"
 end tell
 ```
 
-The description varies: `"搜索"` (empty field) or `"搜索文本栏"` (focused). Match by `starts with "搜索"`.
+### Chinese input via clipboard
 
-### ✅ Safe delete via menu + sheet
+```applescript
+set the clipboard to "瑞幸咖啡"
+tell application "Messages" to activate
+delay 0.3
+tell application "System Events" to tell process "Messages" to keystroke "v" using command down
+```
+
+### Safe delete via menu + strict sheet match
 
 ```applescript
 tell application "System Events"
     tell process "Messages"
         set delItem to menu item "删除对话…" of menu 1 of menu bar item "对话" of menu bar 1
-        if not (enabled of delItem) then return "NO_CHAT_SELECTED"
-        click delItem
-        delay 1.0
-        -- Handle the confirmation sheet
-        if (count of sheets of window 1) > 0 then
-            repeat with b in buttons of sheet 1 of window 1
-                -- IMPORTANT: exact match, NOT "starts with"
-                if (title of b as string) is "删除" then
-                    click b
-                    exit repeat
-                end if
-            end repeat
+        if enabled of delItem then
+            click delItem
+            delay 1.0
+            if (count of sheets of window 1) > 0 then
+                repeat with b in buttons of sheet 1 of window 1
+                    -- IMPORTANT: is "删除", not starts with "删除"
+                    if (title of b as string) is "删除" then
+                        click b
+                        exit repeat
+                    end if
+                end repeat
+            end if
         end if
     end tell
 end tell
 ```
 
-**The sheet has three buttons**: `[删除, 删除并报告垃圾信息, 取消]`. Matching loosely (e.g. `starts with "删除"`) would also hit the second button, which reports the number to Apple as spam — not always desired.
-
-### ✅ Advance to next chat
+### Advance between chats
 
 ```applescript
-tell application "System Events"
-    tell process "Messages"
-        keystroke "]" using {command down, shift down}  -- next chat
-        keystroke "[" using {command down, shift down}  -- previous chat
-    end tell
+tell application "System Events" to tell process "Messages"
+    keystroke "]" using {command down, shift down}  -- next
+    keystroke "[" using {command down, shift down}  -- previous
 end tell
 ```
 
-These are the documented shortcuts under **窗口 → 前往下一个/上一个对话**.
+## Notes.app
 
-### ✅ Read current chat identifier
-
-In standalone-window mode, the window title equals the `chat_identifier`:
+### Enumerate notes
 
 ```applescript
-tell application "System Events"
-    tell process "Messages"
-        return name of window 1
-        -- e.g. "10655007020080169692" or "+86 187 7391 0065"
-    end tell
+tell application "Notes"
+    set output to ""
+    repeat with n in notes
+        set output to output & (id of n as string) & tab & (name of n as string) & linefeed
+    end repeat
+    return output
 end tell
 ```
 
-In sidebar-main-view mode, the window title is `"信息"` — not useful. The batch-delete script takes advantage of standalone mode.
-
-### ✅ Recently Deleted access
+### Move note to folder
 
 ```applescript
-tell application "System Events"
-    tell process "Messages"
-        click menu item "最近删除" of menu 1 of menu bar item "显示" of menu bar 1
-    end tell
+tell application "Notes"
+    set target to first note whose id is "x-coredata://.../NOTE/p123"
+    set archiveFolder to first folder whose name is "Archive"
+    move target to archiveFolder
 end tell
 ```
 
-Restore a deleted conversation:
+### Create Archive folder if missing
 
 ```applescript
-tell application "System Events"
-    tell process "Messages"
-        -- Select first result
-        click (first button of window 1 whose description is "联系人照片")
-        -- Click Restore
-        click (first button of window 1 whose description is "恢复")
-    end tell
+tell application "Notes"
+    if not (exists folder "Archive") then
+        make new folder with properties {name:"Archive"}
+    end if
 end tell
 ```
 
-## Window subtleties
+## Reminders.app
 
-Messages has two window scenes (see `defaults read com.apple.MobileSMS`):
+### Enumerate completed items
 
-- `CKMessagesSceneDelegate` — sidebar + search view (the "main" window)
-- `CKChatSceneDelegate` — standalone single-chat window (via `文件 → 在新窗口中打开对话`)
-
-Once a standalone window has been opened, subsequent Messages launches may restore directly into a standalone window, leaving no sidebar. Recovery:
-
-```bash
-# Force-quit and clear saved state
-killall Messages
-rm -rf ~/Library/Saved\ Application\ State/com.apple.MobileSMS.savedState
-sleep 2
-open -a Messages
+```applescript
+tell application "Reminders"
+    set output to ""
+    repeat with lst in lists
+        repeat with r in (reminders of lst whose completed is true)
+            set output to output & (id of r) & tab & (name of r) & tab & ¬
+                (completion date of r as string) & tab & (name of lst) & linefeed
+        end repeat
+    end repeat
+    return output
+end tell
 ```
 
-Or manually: right-click Dock icon → Quit → reopen from Launchpad.
+### Delete reminder by id
 
-## Timing tips
+```applescript
+tell application "Reminders"
+    delete (first reminder whose id is "X-ID")
+end tell
+```
 
-- After `click searchField`, wait 0.3-0.5s before paste
-- After paste, wait 1.5-2.0s for Messages to filter
-- After menu click for delete, wait 1.0-1.2s for the sheet
-- After clicking the Delete button, wait 1.2-1.5s for Messages to refresh and advance
+## Calendar.app
+
+### Enumerate events older than N months
+
+```applescript
+tell application "Calendar"
+    set cutoff to (current date) - (6 * 30 * days)
+    set output to ""
+    repeat with cal in calendars
+        repeat with e in (events of cal whose start date < cutoff)
+            set output to output & (uid of e) & tab & (summary of e) & tab & ¬
+                (start date of e as string) & tab & (name of cal) & linefeed
+        end repeat
+    end repeat
+    return output
+end tell
+```
+
+### Delete event
+
+```applescript
+tell application "Calendar"
+    delete (first event of calendar "Home" whose uid is "X")
+end tell
+```
+
+## Contacts.app
+
+### Enumerate contacts with phones
+
+```applescript
+tell application "Contacts"
+    set output to ""
+    repeat with p in people
+        set phoneList to ""
+        repeat with ph in phones of p
+            set phoneList to phoneList & (value of ph) & ","
+        end repeat
+        set output to output & (id of p) & tab & (name of p) & tab & phoneList & linefeed
+    end repeat
+    return output
+end tell
+```
+
+Contacts.app has **no scriptable merge verb** — duplicate merges must be done
+manually via the UI ("Card → Look for Duplicates"), or via undocumented
+AddressBook C APIs. This skill emits a Markdown report and leaves the merge to
+the user.
+
+## Mail.app
+
+### Enumerate messages in a mailbox
+
+```applescript
+tell application "Mail"
+    set mb to mailbox "INBOX" of account "MyAccount"
+    set output to ""
+    repeat with m in messages of mb
+        set output to output & (id of m) & tab & (subject of m) & tab & ¬
+            (sender of m) & tab & (date received of m as string) & linefeed
+    end repeat
+    return output
+end tell
+```
+
+### Move to Trash (reversible)
+
+```applescript
+tell application "Mail"
+    set msg to first message of mailbox "INBOX" of account "MyAccount" whose id is X
+    move msg to mailbox "Deleted Messages" of account "MyAccount"
+end tell
+```
+
+Prefer this over `delete msg` — Trash is recoverable for ~30 days depending on the provider.
+
+## Common patterns
+
+### Timeout protection
+
+Always wrap UI automation subprocess calls with a timeout:
+
+```python
+subprocess.run(["osascript", "-e", script], timeout=15, capture_output=True, text=True)
+```
+
+### Clear pending sheet before new action
+
+Before starting any menu click, check for a lingering confirmation sheet and cancel it:
+
+```applescript
+if (count of sheets of window 1) > 0 then
+    repeat with b in buttons of sheet 1 of window 1
+        if (title of b as string) is "取消" then click b
+    end repeat
+end if
+```
+
+### Loop detection
+
+When walking through items (e.g., advancing Messages conversations), keep a
+tail of the last 5 seen identifiers. If all five are equal, halt — something
+is stuck.

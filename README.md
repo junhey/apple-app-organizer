@@ -1,30 +1,33 @@
 # apple-app-organizer
 
-[![tests](https://img.shields.io/badge/tests-34%20passing-brightgreen)](./tests)
+[![tests](https://img.shields.io/badge/tests-129%20passing-brightgreen)](./tests)
+[![modules](https://img.shields.io/badge/modules-6-blue)](#modules)
 [![license](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![skill](https://img.shields.io/badge/agent-skill-purple)](https://skills.sh)
 
 A TDD-built, safety-first cleanup suite for macOS's built-in applications.
 
-> **Status: v0.2 Iteration #1 complete** — Messages module migrated, 34 tests green.
-> Subsequent iterations (Notes, Reminders, Calendar, Contacts, Mail) scheduled
-> every 30 minutes via automation; see [Roadmap](#roadmap).
+**v1.0.0 — All 6 modules complete.**
 
-## What it does
+## Feature matrix
 
-| App | Operations | Safety net |
-|-----|-----------|-----------|
-| **Messages** | Classify spam / real / unknown → batch delete | Recently Deleted (30d) |
-| **Notes** | Detect duplicate / empty notes → archive or delete | "Archive" folder |
-| **Reminders** | List overdue / completed → bulk delete | Per-item confirm |
-| **Calendar** | Purge past events → detect recurring duplicates | Whitelist calendars |
-| **Contacts** | Detect duplicates by phone/email → merge report | Never auto-merges |
-| **Mail** | Classify ad mail → move to Trash | Trash, not delete |
+| Module | Scan | Report | Clean | Safety net | Tests |
+|--------|------|--------|-------|-----------|-------|
+| **Messages** | ✅ | ✅ | ✅ | Recently Deleted (30d) | 13 |
+| **Notes** | ✅ | ✅ | ✅ (via AppleScript) | Move to Archive folder | 26 |
+| **Reminders** | ✅ | ✅ | ✅ | Permanent — always dry-run first | 16 |
+| **Calendar** | ✅ | ✅ | ✅ | Permanent — whitelist required | 14 |
+| **Contacts** | ✅ | ✅ | ⚠️ manual merge | Report-only | 15 |
+| **Mail** | ✅ | ✅ | ✅ | Move to Trash (30d) | 11 |
+
+Plus **common utilities** (whitelist / spam rules / report writers): 21 tests.  
+**Integration tests** (CLI subprocess): 12 tests.  
+**Total: 129 tests, all green.**
 
 ## Install
 
 ```bash
-# Via skills CLI
+# Via skills CLI (recommended)
 npx skills add junhey/apple-app-organizer
 
 # Or clone
@@ -37,24 +40,46 @@ git clone https://github.com/junhey/apple-app-organizer ~/.workbuddy/skills/appl
 2. **Accessibility** — same runtime
 3. **Automation permission** — granted per-app on first prompt
 
-See `references/permissions_guide.md` for a step-by-step walkthrough.
+See [`references/permissions_guide.md`](./references/permissions_guide.md) for step-by-step.
 
 ## Quickstart
 
 ```bash
 # Run the TDD test suite
 cd ~/.workbuddy/skills/apple-app-organizer
-python3 -m pytest tests/ -v
+python3 -m pytest tests/ -v    # 129 tests
 
-# Messages — scan and report
+# Unified CLI
+python3 scripts/organize.py <module> <action> [flags]
+```
+
+### Example flows
+
+```bash
+# Messages — classify and report
 python3 scripts/organize.py messages scan
 python3 scripts/organize.py messages report
 
-# Messages — dry-run clean
-python3 scripts/organize.py messages clean --dry-run
-
-# Messages — execute
+# Messages — dry-run clean, then execute
+python3 scripts/organize.py messages clean               # dry-run by default
 python3 scripts/organize.py messages clean --execute --yes
+
+# Notes — find duplicates and empty notes
+python3 scripts/organize.py notes report --min-chars 10
+
+# Reminders — purge completed older than 30 days
+python3 scripts/organize.py reminders clean --older-than-days 30 --execute
+
+# Calendar — report past events, excluding birthdays
+python3 scripts/organize.py calendar report \
+    --older-than-months 12 --exclude Birthdays "US Holidays"
+
+# Contacts — detect duplicates and generate merge report
+python3 scripts/organize.py contacts report
+
+# Mail — trash ads in Junk mailbox
+python3 scripts/organize.py mail clean \
+    --mailbox Junk --account "iCloud" --execute --yes
 ```
 
 ## Safety principles
@@ -62,8 +87,47 @@ python3 scripts/organize.py messages clean --execute --yes
 1. **Dry-run by default** — every mutating subcommand requires `--execute`
 2. **Whitelist first** — real phone numbers and bank short codes are never deleted
 3. **Trash, not delete** — Mail→Trash, Messages→Recently Deleted, Notes→Archive
-4. **Loop detection** — UI automation halts after 5 identical window titles
-5. **Report first** — every module can emit a Markdown report for user review
+4. **Report first** — every module can emit a Markdown report for user review
+5. **Loop detection** — UI automation halts after 5 identical window titles
+6. **Per-iteration window-title validation** — catches mid-run UI changes
+7. **Strict sheet matching** — `title is "删除"` exactly (avoids "删除并报告" dual-action button)
+
+## Architecture
+
+```
+apple-app-organizer/
+├── SKILL.md                    # Agent-facing entry point
+├── README.md                   # User-facing docs
+├── LICENSE                     # MIT
+├── pytest.ini
+├── scripts/
+│   ├── organize.py             # Unified CLI
+│   └── modules/
+│       ├── common.py           # osa(), whitelist, report writers
+│       ├── messages.py         # iMessage/SMS via chat.db + UI
+│       ├── notes.py            # Notes via NoteStore.sqlite + AS
+│       ├── reminders.py        # Reminders via AS
+│       ├── calendar.py         # Calendar via AS
+│       ├── contacts.py         # Contacts via AS (report-only)
+│       └── mail.py             # Mail via AS (trash-not-delete)
+├── references/
+│   ├── permissions_guide.md
+│   ├── messages_workflow.md
+│   ├── chat_db_schema.md
+│   ├── notes_store_schema.md
+│   ├── eventkit_applescript.md
+│   └── applescript_recipes.md
+└── tests/
+    ├── conftest.py             # Fixtures (fake chat.db, fake NoteStore.sqlite)
+    ├── test_common.py          # 21 tests
+    ├── test_messages.py        # 13 tests
+    ├── test_notes.py           # 26 tests
+    ├── test_reminders.py       # 16 tests
+    ├── test_calendar.py        # 14 tests
+    ├── test_contacts.py        # 15 tests
+    ├── test_mail.py            # 11 tests
+    └── test_integration.py     # 12 tests (CLI subprocess)
+```
 
 ## TDD & testing
 
@@ -71,21 +135,28 @@ python3 scripts/organize.py messages clean --execute --yes
 python3 -m venv venv && source venv/bin/activate
 pip install pytest
 pytest tests/ -v --tb=short
+
+# Only run a specific module's tests
+pytest tests/test_notes.py -v
+
+# With coverage
+pip install pytest-cov
+pytest --cov=scripts.modules tests/
 ```
 
-Test strategy:
-- `test_common.py` — pure unit tests for whitelist, normalization, report writers
-- `test_messages.py` — unit tests via a fake `chat.db` fixture; UI automation is mocked
-- `test_notes.py`, `test_reminders.py` … — analogous, mocked sqlite + mocked osascript
-- `test_integration.py` — subprocess end-to-end CLI, always in `--dry-run`
+All modules follow the same test strategy:
+- **Unit tests**: mock `common.osa` so no real Mail/Messages/etc. is touched
+- **Fixture data**: `conftest.py` builds a temporary SQLite that mimics real chat.db / NoteStore.sqlite schemas
+- **Integration tests**: invoke `organize.py` in a subprocess to validate argparse + module resolution
 
-## Roadmap
+## TDD iteration history
 
-- [x] **v0.2 #1** (22:00) — Skeleton + Messages module + 34 tests
-- [ ] **v0.2 #2** (22:30) — Notes module (scheduled)
-- [ ] **v0.2 #3** (23:00) — Reminders + Calendar (scheduled)
-- [ ] **v0.2 #4** (23:30) — Contacts + Mail + unified CLI (scheduled)
-- [ ] **v1.0.0** (00:00) — Release with full 6-module suite
+| # | Time | Scope | Tests added | Commit |
+|---|------|-------|-------------|--------|
+| 1 | 22:00 | Skeleton + Messages module | 34 | `1c0afe2 feat: initial skeleton + messages module` |
+| 2 | 22:30 | Notes module (auto-scheduled) | 26 → 60 | `a7877cf feat(notes): scanner + duplicate detector + safe archive/delete` |
+| 3 | 23:00 | Reminders + Calendar | 31 → 91 | `991cb68 feat(reminders,calendar): past cleanup + duplicate detection` |
+| 4 | 23:30 | Contacts + Mail + unified CLI + integration | 38 → 129 | `v1.0.0` |
 
 ## License
 
@@ -93,5 +164,6 @@ MIT — see [LICENSE](./LICENSE).
 
 ## Acknowledgements
 
-- Schema research from `terrylica/cc-skills@imessage-query`
-- Predecessor spike: `junhey/imessage-spam-cleanup`
+- Schema research from [`terrylica/cc-skills@imessage-query`](https://skills.sh/terrylica/cc-skills/imessage-query)
+- Predecessor spike: [`junhey/imessage-spam-cleanup`](https://github.com/junhey/imessage-spam-cleanup)
+- Built using [skill-creator](https://skills.sh) agent-skill scaffolding

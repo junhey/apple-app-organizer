@@ -1,0 +1,17 @@
+{
+  "phone_numbers": [
+    "+86 138 0000 0000",
+    "+86 139 0000 0000"
+  ],
+  "email_addresses": [
+    "trusted@example.com"
+  ],
+  "calendar_names": [
+    "Birthdays",
+    "Holidays",
+    "Family"
+  ],
+  "contact_ids": [],
+  "note_ids": [],
+  "reminder_titles": []
+}

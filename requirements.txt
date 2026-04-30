@@ -1,0 +1,12 @@
+# apple-app-organizer requirements
+
+# Core
+# (no third-party dependencies — pure stdlib + subprocess + sqlite3)
+
+# Testing
+pytest>=8.0.0
+
+# Optional: rich for formatted CLI output
+# pip install rich
+# Already bundled with many Python installs; install only if needed:
+# rich>=13.0.0
